@@ -9,6 +9,7 @@ use crate::tracker::{FfbTracker, ForceSample};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ViewMode {
+    All,
     Waveform,
     Histogram,
     Spectrum,
@@ -36,7 +37,7 @@ impl FfbTraceApp {
             source_description,
             paused: false,
             paused_history: None,
-            view_mode: ViewMode::Waveform,
+            view_mode: ViewMode::All,
             time_window_s: 6.0,
             is_mini,
             reveal_serial: false,
@@ -63,15 +64,16 @@ impl eframe::App for FfbTraceApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(440.0, 96.0)));
                 ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(WindowLevel::AlwaysOnTop));
             } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(780.0, 540.0)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(880.0, 680.0)));
                 ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(WindowLevel::Normal));
             }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
             self.view_mode = match self.view_mode {
+                ViewMode::All => ViewMode::Waveform,
                 ViewMode::Waveform => ViewMode::Histogram,
                 ViewMode::Histogram => ViewMode::Spectrum,
-                ViewMode::Spectrum => ViewMode::Waveform,
+                ViewMode::Spectrum => ViewMode::All,
             };
         }
 
@@ -303,8 +305,13 @@ impl eframe::App for FfbTraceApp {
                             // View Mode Toggle
                             ui.selectable_value(
                                 &mut self.view_mode,
-                                ViewMode::Spectrum,
-                                "Spectrum (FFT)",
+                                ViewMode::All,
+                                "All (Unified)",
+                            );
+                            ui.selectable_value(
+                                &mut self.view_mode,
+                                ViewMode::Waveform,
+                                "Waveform",
                             );
                             ui.selectable_value(
                                 &mut self.view_mode,
@@ -313,8 +320,8 @@ impl eframe::App for FfbTraceApp {
                             );
                             ui.selectable_value(
                                 &mut self.view_mode,
-                                ViewMode::Waveform,
-                                "Waveform",
+                                ViewMode::Spectrum,
+                                "Spectrum",
                             );
                         });
                     });
@@ -512,138 +519,79 @@ impl eframe::App for FfbTraceApp {
                 .inner_margin(8.0)
                 .show(ui, |ui| {
                     match self.view_mode {
-                        ViewMode::Waveform => {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new("Force Waveform (-100% to +100%)")
-                                        .size(11.0)
-                                        .color(ink_faint),
-                                );
+                        ViewMode::All => {
+                            let available_h = ui.available_height();
+                            let top_h = (available_h * 0.48).clamp(160.0, 360.0);
+                            let bottom_h = (available_h - top_h - 14.0).max(140.0);
 
-                                if self.paused {
-                                    ui.label(
-                                        RichText::new("PAUSED [Space]")
-                                            .size(10.5)
-                                            .color(compared_orange)
-                                            .strong(),
+                            render_waveform_view(
+                                ui,
+                                &history,
+                                &mut self.paused,
+                                &mut self.time_window_s,
+                                top_h,
+                                ref_blue,
+                                loss_red,
+                                line_border,
+                                compared_orange,
+                                ink_faint,
+                            );
+
+                            ui.add_space(6.0);
+
+                            ui.columns(2, |cols| {
+                                cols[0].vertical(|ui| {
+                                    render_histogram_view(
+                                        ui,
+                                        &histogram_bins,
+                                        constant_count,
+                                        bottom_h,
+                                        sunken_bg,
+                                        line_border,
+                                        ref_blue,
+                                        loss_red,
+                                        gain_green,
+                                        ink_faint,
                                     );
-                                }
-
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        let pause_text = if self.paused {
-                                            "Resume [Space]"
-                                        } else {
-                                            "Pause [Space]"
-                                        };
-                                        if ui.button(RichText::new(pause_text).size(11.0)).clicked()
-                                        {
-                                            self.paused = !self.paused;
-                                        }
-
-                                        ui.separator();
-
-                                        ui.selectable_value(&mut self.time_window_s, 10.0, "10s");
-                                        ui.selectable_value(&mut self.time_window_s, 6.0, "6s");
-                                        ui.selectable_value(&mut self.time_window_s, 3.0, "3s");
-                                    },
-                                );
-                            });
-
-                            let plot_points: PlotPoints = history
-                                .iter()
-                                .map(|s| [s.time_s, s.level_pct as f64])
-                                .collect();
-
-                            let line = Line::new(plot_points).color(ref_blue).width(1.4_f32);
-
-                            // Waveform clipping highlight dots on saturated peaks
-                            let clip_points: PlotPoints = history
-                                .iter()
-                                .filter(|s| s.is_clipped || s.level_pct.abs() >= 99.5)
-                                .map(|s| [s.time_s, s.level_pct as f64])
-                                .collect();
-
-                            let clip_markers = Points::new(clip_points)
-                                .color(loss_red)
-                                .radius(2.5_f32)
-                                .shape(MarkerShape::Circle);
-
-                            let latest_time = history.back().map_or(0.0, |s| s.time_s);
-                            let x_min = (latest_time - self.time_window_s).max(0.0);
-                            let x_max = latest_time.max(self.time_window_s);
-
-                            Plot::new("ffb_waveform")
-                                .height(ui.available_height() - 34.0)
-                                .include_y(-108.0)
-                                .include_y(108.0)
-                                .include_x(x_min)
-                                .include_x(x_max)
-                                .show_axes([false, true])
-                                .show_grid([true, true])
-                                .allow_zoom(false)
-                                .allow_drag(false)
-                                .allow_scroll(false)
-                                .show(ui, |plot_ui| {
-                                    // Clipping limits
-                                    plot_ui.hline(
-                                        HLine::new(100.0)
-                                            .color(loss_red)
-                                            .style(LineStyle::Dashed { length: 4.0 }),
-                                    );
-                                    plot_ui.hline(
-                                        HLine::new(-100.0)
-                                            .color(loss_red)
-                                            .style(LineStyle::Dashed { length: 4.0 }),
-                                    );
-                                    plot_ui.hline(
-                                        HLine::new(0.0).color(line_border).style(LineStyle::Solid),
-                                    );
-
-                                    // Annotations on right edge
-                                    plot_ui.text(Text::new(
-                                        egui_plot::PlotPoint::new(
-                                            x_min + (x_max - x_min) * 0.02,
-                                            102.0,
-                                        ),
-                                        RichText::new("+100% Clip").size(9.0).color(loss_red),
-                                    ));
-                                    plot_ui.text(Text::new(
-                                        egui_plot::PlotPoint::new(
-                                            x_min + (x_max - x_min) * 0.02,
-                                            -102.0,
-                                        ),
-                                        RichText::new("-100% Clip").size(9.0).color(loss_red),
-                                    ));
-
-                                    plot_ui.line(line);
-                                    plot_ui.points(clip_markers);
                                 });
+
+                                cols[1].vertical(|ui| {
+                                    render_spectrum_view(
+                                        ui,
+                                        &history,
+                                        bottom_h,
+                                        line_border,
+                                        ref_blue,
+                                        gain_green,
+                                        compared_orange,
+                                        loss_red,
+                                        ink_faint,
+                                    );
+                                });
+                            });
+                        }
+                        ViewMode::Waveform => {
+                            let h = ui.available_height();
+                            render_waveform_view(
+                                ui,
+                                &history,
+                                &mut self.paused,
+                                &mut self.time_window_s,
+                                h,
+                                ref_blue,
+                                loss_red,
+                                line_border,
+                                compared_orange,
+                                ink_faint,
+                            );
                         }
                         ViewMode::Histogram => {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new("Force Distribution Histogram")
-                                        .size(11.0)
-                                        .color(ink_faint),
-                                );
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.label(
-                                            RichText::new("21 bins (-100% to +100%, 10% / bin)")
-                                                .size(10.0)
-                                                .color(ink_faint),
-                                        );
-                                    },
-                                );
-                            });
-
-                            render_histogram(
+                            let h = ui.available_height();
+                            render_histogram_view(
                                 ui,
                                 &histogram_bins,
                                 constant_count,
+                                h,
                                 sunken_bg,
                                 line_border,
                                 ref_blue,
@@ -653,10 +601,11 @@ impl eframe::App for FfbTraceApp {
                             );
                         }
                         ViewMode::Spectrum => {
-                            render_spectrum(
+                            let h = ui.available_height();
+                            render_spectrum_view(
                                 ui,
                                 &history,
-                                sunken_bg,
+                                h,
                                 line_border,
                                 ref_blue,
                                 gain_green,
@@ -804,10 +753,130 @@ fn render_force_bar(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn render_waveform_view(
+    ui: &mut egui::Ui,
+    history: &VecDeque<ForceSample>,
+    paused: &mut bool,
+    time_window_s: &mut f64,
+    height: f32,
+    ref_blue: Color32,
+    loss_red: Color32,
+    line_border: Color32,
+    compared_orange: Color32,
+    ink_faint: Color32,
+) {
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("Force Waveform (-100% to +100%)")
+                .size(11.0)
+                .color(ink_faint),
+        );
+
+        if *paused {
+            ui.label(
+                RichText::new("PAUSED [Space]")
+                    .size(10.5)
+                    .color(compared_orange)
+                    .strong(),
+            );
+        }
+
+        ui.with_layout(
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                let pause_text = if *paused {
+                    "Resume [Space]"
+                } else {
+                    "Pause [Space]"
+                };
+                if ui.button(RichText::new(pause_text).size(11.0)).clicked() {
+                    *paused = !*paused;
+                }
+
+                ui.separator();
+
+                ui.selectable_value(time_window_s, 10.0, "10s");
+                ui.selectable_value(time_window_s, 6.0, "6s");
+                ui.selectable_value(time_window_s, 3.0, "3s");
+            },
+        );
+    });
+
+    let plot_points: PlotPoints = history
+        .iter()
+        .map(|s| [s.time_s, s.level_pct as f64])
+        .collect();
+
+    let line = Line::new(plot_points).color(ref_blue).width(1.4_f32);
+
+    let clip_points: PlotPoints = history
+        .iter()
+        .filter(|s| s.is_clipped || s.level_pct.abs() >= 99.5)
+        .map(|s| [s.time_s, s.level_pct as f64])
+        .collect();
+
+    let clip_markers = Points::new(clip_points)
+        .color(loss_red)
+        .radius(2.5_f32)
+        .shape(MarkerShape::Circle);
+
+    let latest_time = history.back().map_or(0.0, |s| s.time_s);
+    let x_min = (latest_time - *time_window_s).max(0.0);
+    let x_max = latest_time.max(*time_window_s);
+
+    let plot_h = (height - 24.0).max(80.0);
+    Plot::new("ffb_waveform")
+        .height(plot_h)
+        .include_y(-108.0)
+        .include_y(108.0)
+        .include_x(x_min)
+        .include_x(x_max)
+        .show_axes([false, true])
+        .show_grid([true, true])
+        .allow_zoom(false)
+        .allow_drag(false)
+        .allow_scroll(false)
+        .show(ui, |plot_ui| {
+            plot_ui.hline(
+                HLine::new(100.0)
+                    .color(loss_red)
+                    .style(LineStyle::Dashed { length: 4.0 }),
+            );
+            plot_ui.hline(
+                HLine::new(-100.0)
+                    .color(loss_red)
+                    .style(LineStyle::Dashed { length: 4.0 }),
+            );
+            plot_ui.hline(
+                HLine::new(0.0).color(line_border).style(LineStyle::Solid),
+            );
+
+            plot_ui.text(Text::new(
+                egui_plot::PlotPoint::new(
+                    x_min + (x_max - x_min) * 0.02,
+                    102.0,
+                ),
+                RichText::new("+100% Clip").size(9.0).color(loss_red),
+            ));
+            plot_ui.text(Text::new(
+                egui_plot::PlotPoint::new(
+                    x_min + (x_max - x_min) * 0.02,
+                    -102.0,
+                ),
+                RichText::new("-100% Clip").size(9.0).color(loss_red),
+            ));
+
+            plot_ui.line(line);
+            plot_ui.points(clip_markers);
+        });
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_histogram(
     ui: &mut egui::Ui,
     bins: &[u64; 21],
     total_count: u64,
+    height: f32,
     bg: Color32,
     border: Color32,
     bar_fill: Color32,
@@ -815,7 +884,7 @@ fn render_histogram(
     center_fill: Color32,
     text_color: Color32,
 ) {
-    let desired_size = Vec2::new(ui.available_width(), ui.available_height() - 30.0);
+    let desired_size = Vec2::new(ui.available_width(), height);
     let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
 
     let painter = ui.painter();
@@ -896,10 +965,56 @@ fn render_histogram(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_spectrum(
+fn render_histogram_view(
     ui: &mut egui::Ui,
-    history: &std::collections::VecDeque<crate::tracker::ForceSample>,
-    _sunken_bg: Color32,
+    bins: &[u64; 21],
+    total_count: u64,
+    height: f32,
+    bg: Color32,
+    border: Color32,
+    bar_fill: Color32,
+    clip_fill: Color32,
+    center_fill: Color32,
+    text_color: Color32,
+) {
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("Force Distribution Histogram")
+                .size(11.0)
+                .color(text_color),
+        );
+        ui.with_layout(
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                ui.label(
+                    RichText::new("21 bins (-100% to +100%)")
+                        .size(10.0)
+                        .color(text_color),
+                );
+            },
+        );
+    });
+
+    let hist_h = (height - 22.0).max(60.0);
+    render_histogram(
+        ui,
+        bins,
+        total_count,
+        hist_h,
+        bg,
+        border,
+        bar_fill,
+        clip_fill,
+        center_fill,
+        text_color,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_spectrum_view(
+    ui: &mut egui::Ui,
+    history: &VecDeque<ForceSample>,
+    height: f32,
     line_border: Color32,
     ref_blue: Color32,
     gain_green: Color32,
@@ -911,25 +1026,25 @@ fn render_spectrum(
 
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new("Vibration Spectrum Analyzer (FFT, 0 - 100 Hz)")
+            RichText::new("Vibration Spectrum (FFT)")
                 .size(11.0)
                 .color(ink_faint),
         );
 
         if analysis.dominant_magnitude_pct >= 0.5 {
             let (band_desc, band_color) = if analysis.dominant_freq_hz < 4.0 {
-                ("Steering / SAT", ref_blue)
+                ("Steering", ref_blue)
             } else if analysis.dominant_freq_hz < 15.0 {
-                ("Chassis & Curbs", gain_green)
+                ("Curbs", gain_green)
             } else if analysis.dominant_freq_hz < 40.0 {
-                ("Tire Scrub & Texture", compared_orange)
+                ("Scrub", compared_orange)
             } else {
-                ("Engine & ABS", loss_red)
+                ("Engine/ABS", loss_red)
             };
 
             ui.label(
                 RichText::new(format!(
-                    "Peak: {:.1} Hz ({:.1}%) • {}",
+                    "Peak: {:.1}Hz ({:.1}%) • {}",
                     analysis.dominant_freq_hz, analysis.dominant_magnitude_pct, band_desc
                 ))
                 .size(11.0)
@@ -940,32 +1055,26 @@ fn render_spectrum(
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
-                RichText::new(format!("40+Hz High: {:.0}%", analysis.bands.high_freq_pct))
-                    .size(10.0)
+                RichText::new(format!("High: {:.0}%", analysis.bands.high_freq_pct))
+                    .size(9.5)
                     .color(loss_red),
             );
-            ui.label(RichText::new("•").size(10.0).color(line_border));
+            ui.label(RichText::new("•").size(9.5).color(line_border));
             ui.label(
-                RichText::new(format!(
-                    "15-40Hz Scrub: {:.0}%",
-                    analysis.bands.road_texture_pct
-                ))
-                .size(10.0)
-                .color(compared_orange),
+                RichText::new(format!("Scrub: {:.0}%", analysis.bands.road_texture_pct))
+                    .size(9.5)
+                    .color(compared_orange),
             );
-            ui.label(RichText::new("•").size(10.0).color(line_border));
+            ui.label(RichText::new("•").size(9.5).color(line_border));
             ui.label(
-                RichText::new(format!(
-                    "4-15Hz Curbs: {:.0}%",
-                    analysis.bands.chassis_curbs_pct
-                ))
-                .size(10.0)
-                .color(gain_green),
+                RichText::new(format!("Curbs: {:.0}%", analysis.bands.chassis_curbs_pct))
+                    .size(9.5)
+                    .color(gain_green),
             );
-            ui.label(RichText::new("•").size(10.0).color(line_border));
+            ui.label(RichText::new("•").size(9.5).color(line_border));
             ui.label(
-                RichText::new(format!("0-4Hz SAT: {:.0}%", analysis.bands.steering_pct))
-                    .size(10.0)
+                RichText::new(format!("SAT: {:.0}%", analysis.bands.steering_pct))
+                    .size(9.5)
                     .color(ref_blue),
             );
         });
@@ -984,21 +1093,20 @@ fn render_spectrum(
         .fold(0.0_f32, f32::max)
         .max(25.0);
 
+    let plot_h = (height - 24.0).max(60.0);
     Plot::new("ffb_spectrum")
-        .height(ui.available_height() - 34.0)
+        .height(plot_h)
         .include_x(0.0)
         .include_x(100.0)
         .include_y(0.0)
         .include_y(max_mag as f64 * 1.15)
         .show_axes([true, true])
         .show_grid([true, true])
-        .x_axis_label("Frequency (Hz)")
-        .y_axis_label("Amplitude (% FFB)")
+        .x_axis_label("Hz")
         .allow_zoom(false)
         .allow_drag(false)
         .allow_scroll(false)
         .show(ui, |plot_ui| {
-            // Frequency band vertical partition lines
             plot_ui.vline(
                 VLine::new(4.0)
                     .color(line_border)
@@ -1015,33 +1123,30 @@ fn render_spectrum(
                     .style(LineStyle::Dashed { length: 3.0 }),
             );
 
-            // Frequency band labels along the top
             let y_label_pos = max_mag as f64 * 1.05;
             plot_ui.text(Text::new(
                 egui_plot::PlotPoint::new(2.0, y_label_pos),
-                RichText::new("Steering / Load").size(9.0).color(ref_blue),
+                RichText::new("SAT").size(8.5).color(ref_blue),
             ));
             plot_ui.text(Text::new(
                 egui_plot::PlotPoint::new(9.5, y_label_pos),
-                RichText::new("Chassis & Curbs").size(9.0).color(gain_green),
+                RichText::new("Curbs").size(8.5).color(gain_green),
             ));
             plot_ui.text(Text::new(
                 egui_plot::PlotPoint::new(27.5, y_label_pos),
-                RichText::new("Tire Scrub / Texture").size(9.0).color(compared_orange),
+                RichText::new("Scrub").size(8.5).color(compared_orange),
             ));
             plot_ui.text(Text::new(
                 egui_plot::PlotPoint::new(70.0, y_label_pos),
-                RichText::new("Engine & ABS").size(9.0).color(loss_red),
+                RichText::new("Engine").size(8.5).color(loss_red),
             ));
 
-            // Spectrum Curve with fill
             let line = Line::new(points)
                 .color(ref_blue)
                 .fill(0.0_f32)
                 .width(1.8_f32);
             plot_ui.line(line);
 
-            // Highlight dominant frequency peak if present
             if analysis.dominant_magnitude_pct >= 0.5 {
                 let peak_pt = Points::new(vec![[
                     analysis.dominant_freq_hz as f64,
