@@ -8,6 +8,16 @@ Real-time Force Feedback (FFB) clipping and telemetry monitor for Linux sim raci
 
 ---
 
+## Core Principle: Empirical Ground Truth
+
+Sim racers often tune force feedback based on subjective feel, wheelbase LEDs, or vendor software filters. This introduces bias and guesswork. `ffb-trace` replaces subjective impressions with **empirical ground truth**:
+
+- **OS Boundary Interception**: `libffbwrapper.so` hooks `ioctl(EVIOCSFF)` calls between the game and the Linux `evdev` subsystem. It captures the exact digital force values issued by the physics engine before any wheelbase driver alterations.
+- **Mathematical Saturation**: In the Linux kernel force feedback API, force levels use signed 16-bit integers (`-32768` to `+32767`). Clipping is an objective mathematical fact: whenever `|level| >= 32767`, software dynamic range is exhausted and telemetry details are flattened.
+- **Data-Driven Tuning**: Gain advice derives from measured peak headroom and histogram distribution across the entire session, enabling repeatable, evidence-based calibration.
+
+---
+
 ## Features
 
 - **Motorsport Telemetry GUI (`egui`)**:
