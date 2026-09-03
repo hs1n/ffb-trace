@@ -1,0 +1,14 @@
+[package]
+name = "ffb-trace"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Real-time Force Feedback (FFB) clipping and telemetry monitor for Linux sim racing"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+directories = "5"
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui_plot = "0.31"
+parking_lot = "0.12"
+

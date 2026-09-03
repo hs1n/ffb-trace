@@ -1,0 +1,6 @@
+/target
+c/*.so
+c/*.d
+*.log
+*.csv
+.DS_Store

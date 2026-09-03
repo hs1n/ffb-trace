@@ -1,0 +1,127 @@
+# ffb-trace
+
+Real-time Force Feedback (FFB) clipping and telemetry monitor for Linux sim racing.
+
+![ffb-trace Waveform Dashboard](docs/screenshots/waveform.png)
+
+`ffb-trace` monitors Linux `evdev` force feedback calls in real time. It detects force clipping, computes update rates (Hz), provides actionable gain tuning advice, and renders live force waveforms.
+
+---
+
+## Features
+
+- **Motorsport Telemetry GUI (`egui`)**:
+  - High-contrast dark telemetry theme aligned with `sms-telemetry` design tokens.
+  - Large bidirectional master force gauge (`-100%` to `+100%`) with tick marks and peak hold.
+  - **400ms Clipping Alert Latch**: Keeps transient single-tick clipping clearly visible.
+  - **Actionable Gain Tuning Advice**: Computes peak dynamic headroom and advises gain adjustments (`GAIN +15%`, `GAIN -8%`, `OPTIMAL`).
+  - **Dual Telemetry Views**:
+    - **Waveform View**: Rolling time-series curve (`3s`, `6s`, `10s`), zero line, and clipping boundary markers.
+    - **Distribution Histogram**: 21-bin force histogram showing overall signal balance and edge saturation.
+  - **Mini-HUD Mode (`--mini` or press `M`)**: Compact always-on-top overlay strip (440x96) for multi-monitor or in-cockpit viewing.
+  - **Hardware Privacy**: Device serial numbers are masked by default (`••••••••`), click to reveal/hide.
+  - **Driver Rig Ergonomics**:
+    - `Space`: Pause / Resume waveform scroll
+    - `R`: Reset session metrics
+    - `M`: Toggle Mini-HUD / Full Dashboard
+    - `Tab`: Switch Waveform / Distribution views
+- **Multi-Directory Auto-Detection**:
+  - Automatically tracks the newest active session across `~/.local/state/ffb-trace/` and `~/ffblogs/`.
+  - Seamlessly resets and tracks new sessions when the game restarts.
+- **Lightweight Native Binary**:
+  - Single standalone binary written in Rust.
+  - Uses minimal CPU and GPU resources during races.
+
+---
+
+## Installation
+
+### Prerequisites
+
+- Rust toolchain (`cargo` and `rustc`):
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```
+
+### Build
+
+```bash
+cargo build --release
+```
+
+Copy the binary to your local path:
+```bash
+cp target/release/ffb-trace ~/.local/bin/
+```
+
+---
+
+## Usage
+
+### Method 1: Simple On-Demand Launch (Recommended)
+
+You do not need to look up device paths or configure complex parameters. `ffb-trace` auto-detects your wheel and runs the game:
+
+```bash
+# Launch a Steam game directly (e.g. Project CARS 2)
+ffb-trace run steam steam://rungameid/378860
+
+# Or launch any native/Proton sim command
+ffb-trace run /path/to/game
+```
+
+If you prefer launching from Steam, set this minimal option once:
+```bash
+ffb-trace run -- %command%
+```
+
+### Method 2: Standalone Live Monitor
+
+If your game is already running or writing to a log:
+
+```bash
+# Auto-follow the newest session log in ~/.local/state/ffb-trace/
+ffb-trace
+
+# Trace a specific log file
+ffb-trace --file /path/to/session.log
+
+# Start in compact Mini-HUD overlay mode (always-on-top)
+ffb-trace --mini
+
+# Run in headless terminal mode
+ffb-trace --no-gui
+```
+
+---
+
+## Alignment with sms-telemetry
+
+`ffb-trace` adopts the exact dark palette, contrast tokens, and line styling defined in `sms-telemetry`'s `theme.css`.
+
+---
+
+## Architecture
+
+```text
+Sim Racing Game (Proton / Native)
+       │
+       ▼
+   libffbwrapper.so (intercepts EVIOCSFF ioctl)
+       │
+       ├─► ~/.local/state/ffb-trace/*.log (or FIFO pipe)
+       │         │
+       │         ▼
+       │     ffb-trace (Rust Desktop App)
+       │         │
+       │         └─► egui Desktop GUI (Waveform, Force Bar, Clip Alert)
+       ▼
+Linux evdev Kernel Subsystem -> Steering Wheel Base
+```
+
+---
+
+## License & Credits
+
+- `ffb-trace` is licensed under **GPL-3.0-only**. See the [LICENSE](LICENSE) file.
+- The embedded interceptor (`c/ffbwrapper.c`) is derived from [ffbtools](https://github.com/berarma/ffbtools) by Bernat Arlandis, licensed under GPL-3.0-or-later. All copyright headers are preserved.
