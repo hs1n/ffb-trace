@@ -121,7 +121,21 @@ Linux evdev Kernel Subsystem -> Steering Wheel Base
 
 ---
 
+## Safety Warning & Disclaimer
+
+> [!CAUTION]
+> **Risk of Personal Injury and Hardware Damage**
+>
+> Force feedback hardware (especially Direct Drive wheelbases) can produce high torque and sudden, violent movements. Increasing force feedback gain can cause severe physical injury (including sprains, fractures, or bruises) or equipment damage.
+>
+> - **Informational estimates only**: All gain tuning advice and telemetry metrics in `ffb-trace` are mathematical calculations based on software signal levels. They do not consider your wheelbase torque rating, physical strength, or mounting rig rigidity.
+> - **Adjust gain gradually**: Always adjust gain in small increments and test carefully. Keep hands and body clear of spokes and moving parts during violent oscillations, spins, or crashes.
+> - **Assumption of risk and disclaimer of liability**: You use this software and apply its recommendations entirely at your own risk. The authors and contributors accept no responsibility or liability for any personal injury, hardware failure, or property damage resulting from the use of `ffb-trace`.
+
+---
+
 ## License & Credits
 
 - `ffb-trace` is licensed under **GPL-3.0-only**. See the [LICENSE](LICENSE) file.
 - The embedded interceptor (`c/ffbwrapper.c`) is derived from [ffbtools](https://github.com/berarma/ffbtools) by Bernat Arlandis, licensed under GPL-3.0-or-later. All copyright headers are preserved.
+
