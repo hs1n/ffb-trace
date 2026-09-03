@@ -7,20 +7,11 @@ use std::sync::Arc;
 use crate::spectrum::analyze_spectrum;
 use crate::tracker::{FfbTracker, ForceSample};
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum ViewMode {
-    All,
-    Waveform,
-    Histogram,
-    Spectrum,
-}
-
 pub struct FfbTraceApp {
     tracker: Arc<RwLock<FfbTracker>>,
     source_description: Arc<RwLock<String>>,
     paused: bool,
     paused_history: Option<VecDeque<ForceSample>>,
-    view_mode: ViewMode,
     time_window_s: f64,
     is_mini: bool,
     reveal_serial: bool,
@@ -37,7 +28,6 @@ impl FfbTraceApp {
             source_description,
             paused: false,
             paused_history: None,
-            view_mode: ViewMode::All,
             time_window_s: 6.0,
             is_mini,
             reveal_serial: false,
@@ -67,14 +57,6 @@ impl eframe::App for FfbTraceApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(880.0, 680.0)));
                 ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(WindowLevel::Normal));
             }
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
-            self.view_mode = match self.view_mode {
-                ViewMode::All => ViewMode::Waveform,
-                ViewMode::Waveform => ViewMode::Histogram,
-                ViewMode::Histogram => ViewMode::Spectrum,
-                ViewMode::Spectrum => ViewMode::All,
-            };
         }
 
         let (tracker_snapshot, tuning_rec) = {
@@ -295,34 +277,10 @@ impl eframe::App for FfbTraceApp {
                             // Reset Session
                             if ui
                                 .button(RichText::new("Reset [R]").size(11.0).color(ink_dim))
-                                .clicked()
+                                 .clicked()
                             {
                                 self.tracker.write().reset_session();
                             }
-
-                            ui.separator();
-
-                            // View Mode Toggle
-                            ui.selectable_value(
-                                &mut self.view_mode,
-                                ViewMode::All,
-                                "All (Unified)",
-                            );
-                            ui.selectable_value(
-                                &mut self.view_mode,
-                                ViewMode::Waveform,
-                                "Waveform",
-                            );
-                            ui.selectable_value(
-                                &mut self.view_mode,
-                                ViewMode::Histogram,
-                                "Distribution",
-                            );
-                            ui.selectable_value(
-                                &mut self.view_mode,
-                                ViewMode::Spectrum,
-                                "Spectrum",
-                            );
                         });
                     });
 
@@ -510,112 +468,89 @@ impl eframe::App for FfbTraceApp {
             });
 
             // --------------------------------------------------------------
-            // 4. MAIN VISUALIZER (WAVEFORM / HISTOGRAM)
+            // 4. MAIN TELEMETRY CARDS (WAVEFORM / HISTOGRAM / SPECTRUM)
             // --------------------------------------------------------------
+            let available_h = ui.available_height();
+            let top_card_h = (available_h * 0.49).clamp(160.0, 360.0);
+            let bottom_card_h = (available_h - top_card_h - 8.0).max(140.0);
+
+            // Card 1: Waveform Card
             egui::Frame::NONE
                 .fill(panel_bg)
                 .stroke(Stroke::new(1.0_f32, line_border))
                 .corner_radius(CornerRadius::same(4))
-                .inner_margin(8.0)
+                .inner_margin(Vec2::new(10.0, 8.0))
                 .show(ui, |ui| {
-                    match self.view_mode {
-                        ViewMode::All => {
-                            let available_h = ui.available_height();
-                            let top_h = (available_h * 0.48).clamp(160.0, 360.0);
-                            let bottom_h = (available_h - top_h - 14.0).max(140.0);
+                    ui.set_width(ui.available_width());
+                    ui.set_min_height(top_card_h - 16.0);
+                    render_waveform_view(
+                        ui,
+                        &history,
+                        &mut self.paused,
+                        &mut self.time_window_s,
+                        top_card_h - 16.0,
+                        ref_blue,
+                        loss_red,
+                        line_border,
+                        compared_orange,
+                        ink_dim,
+                        ink_faint,
+                    );
+                });
 
-                            render_waveform_view(
-                                ui,
-                                &history,
-                                &mut self.paused,
-                                &mut self.time_window_s,
-                                top_h,
-                                ref_blue,
-                                loss_red,
-                                line_border,
-                                compared_orange,
-                                ink_faint,
-                            );
+            ui.add_space(8.0);
 
-                            ui.add_space(6.0);
-
-                            ui.columns(2, |cols| {
-                                cols[0].vertical(|ui| {
-                                    render_histogram_view(
-                                        ui,
-                                        &histogram_bins,
-                                        constant_count,
-                                        bottom_h,
-                                        sunken_bg,
-                                        line_border,
-                                        ref_blue,
-                                        loss_red,
-                                        gain_green,
-                                        ink_faint,
-                                    );
-                                });
-
-                                cols[1].vertical(|ui| {
-                                    render_spectrum_view(
-                                        ui,
-                                        &history,
-                                        bottom_h,
-                                        line_border,
-                                        ref_blue,
-                                        gain_green,
-                                        compared_orange,
-                                        loss_red,
-                                        ink_faint,
-                                    );
-                                });
-                            });
-                        }
-                        ViewMode::Waveform => {
-                            let h = ui.available_height();
-                            render_waveform_view(
-                                ui,
-                                &history,
-                                &mut self.paused,
-                                &mut self.time_window_s,
-                                h,
-                                ref_blue,
-                                loss_red,
-                                line_border,
-                                compared_orange,
-                                ink_faint,
-                            );
-                        }
-                        ViewMode::Histogram => {
-                            let h = ui.available_height();
+            // Card 2 (Distribution) & Card 3 (Spectrum)
+            ui.columns(2, |cols| {
+                cols[0].vertical(|ui| {
+                    egui::Frame::NONE
+                        .fill(panel_bg)
+                        .stroke(Stroke::new(1.0_f32, line_border))
+                        .corner_radius(CornerRadius::same(4))
+                        .inner_margin(Vec2::new(10.0, 8.0))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.set_min_height(bottom_card_h - 16.0);
                             render_histogram_view(
                                 ui,
                                 &histogram_bins,
                                 constant_count,
-                                h,
+                                bottom_card_h - 16.0,
                                 sunken_bg,
                                 line_border,
                                 ref_blue,
                                 loss_red,
                                 gain_green,
+                                ink_dim,
                                 ink_faint,
                             );
-                        }
-                        ViewMode::Spectrum => {
-                            let h = ui.available_height();
+                        });
+                });
+
+                cols[1].vertical(|ui| {
+                    egui::Frame::NONE
+                        .fill(panel_bg)
+                        .stroke(Stroke::new(1.0_f32, line_border))
+                        .corner_radius(CornerRadius::same(4))
+                        .inner_margin(Vec2::new(10.0, 8.0))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.set_min_height(bottom_card_h - 16.0);
                             render_spectrum_view(
                                 ui,
                                 &history,
-                                h,
+                                bottom_card_h - 16.0,
                                 line_border,
                                 ref_blue,
                                 gain_green,
                                 compared_orange,
                                 loss_red,
+                                ink_dim,
                                 ink_faint,
                             );
-                        }
-                    }
+                        });
                 });
+            });
         });
     }
 }
@@ -763,19 +698,27 @@ fn render_waveform_view(
     loss_red: Color32,
     line_border: Color32,
     compared_orange: Color32,
+    ink_dim: Color32,
     ink_faint: Color32,
 ) {
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new("Force Waveform (-100% to +100%)")
-                .size(11.0)
-                .color(ink_faint),
+            RichText::new("FORCE WAVEFORM")
+                .size(9.5)
+                .color(ink_dim)
+                .strong(),
+        );
+        ui.label(
+            RichText::new("(-100% to +100%)")
+                .size(9.5)
+                .color(ink_faint)
+                .monospace(),
         );
 
         if *paused {
             ui.label(
                 RichText::new("PAUSED [Space]")
-                    .size(10.5)
+                    .size(9.5)
                     .color(compared_orange)
                     .strong(),
             );
@@ -789,7 +732,10 @@ fn render_waveform_view(
                 } else {
                     "Pause [Space]"
                 };
-                if ui.button(RichText::new(pause_text).size(11.0)).clicked() {
+                if ui
+                    .button(RichText::new(pause_text).size(10.5).color(ink_dim))
+                    .clicked()
+                {
                     *paused = !*paused;
                 }
 
@@ -975,21 +921,30 @@ fn render_histogram_view(
     bar_fill: Color32,
     clip_fill: Color32,
     center_fill: Color32,
-    text_color: Color32,
+    ink_dim: Color32,
+    ink_faint: Color32,
 ) {
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new("Force Distribution Histogram")
-                .size(11.0)
-                .color(text_color),
+            RichText::new("FORCE DISTRIBUTION")
+                .size(9.5)
+                .color(ink_dim)
+                .strong(),
+        );
+        ui.label(
+            RichText::new("21 Bins")
+                .size(9.5)
+                .color(ink_faint)
+                .monospace(),
         );
         ui.with_layout(
             egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
                 ui.label(
-                    RichText::new("21 bins (-100% to +100%)")
-                        .size(10.0)
-                        .color(text_color),
+                    RichText::new(format!("{} updates", total_count))
+                        .size(9.5)
+                        .color(ink_faint)
+                        .monospace(),
                 );
             },
         );
@@ -1006,7 +961,7 @@ fn render_histogram_view(
         bar_fill,
         clip_fill,
         center_fill,
-        text_color,
+        ink_faint,
     );
 }
 
@@ -1020,34 +975,42 @@ fn render_spectrum_view(
     gain_green: Color32,
     compared_orange: Color32,
     loss_red: Color32,
+    ink_dim: Color32,
     ink_faint: Color32,
 ) {
     let analysis = analyze_spectrum(history);
 
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new("Vibration Spectrum (FFT)")
-                .size(11.0)
-                .color(ink_faint),
+            RichText::new("VIBRATION SPECTRUM")
+                .size(9.5)
+                .color(ink_dim)
+                .strong(),
+        );
+        ui.label(
+            RichText::new("FFT 0-100Hz")
+                .size(9.5)
+                .color(ink_faint)
+                .monospace(),
         );
 
         if analysis.dominant_magnitude_pct >= 0.5 {
             let (band_desc, band_color) = if analysis.dominant_freq_hz < 4.0 {
-                ("Steering", ref_blue)
+                ("SAT", ref_blue)
             } else if analysis.dominant_freq_hz < 15.0 {
                 ("Curbs", gain_green)
             } else if analysis.dominant_freq_hz < 40.0 {
                 ("Scrub", compared_orange)
             } else {
-                ("Engine/ABS", loss_red)
+                ("Engine", loss_red)
             };
 
             ui.label(
                 RichText::new(format!(
-                    "Peak: {:.1}Hz ({:.1}%) • {}",
+                    "Peak {:.0}Hz ({:.0}%) • {}",
                     analysis.dominant_freq_hz, analysis.dominant_magnitude_pct, band_desc
                 ))
-                .size(11.0)
+                .size(9.5)
                 .color(band_color)
                 .strong(),
             );
@@ -1055,27 +1018,31 @@ fn render_spectrum_view(
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
-                RichText::new(format!("High: {:.0}%", analysis.bands.high_freq_pct))
-                    .size(9.5)
-                    .color(loss_red),
+                RichText::new(format!("Eng {:.0}%", analysis.bands.high_freq_pct))
+                    .size(9.0)
+                    .color(loss_red)
+                    .monospace(),
             );
-            ui.label(RichText::new("•").size(9.5).color(line_border));
+            ui.label(RichText::new("•").size(9.0).color(line_border));
             ui.label(
-                RichText::new(format!("Scrub: {:.0}%", analysis.bands.road_texture_pct))
-                    .size(9.5)
-                    .color(compared_orange),
+                RichText::new(format!("Scrub {:.0}%", analysis.bands.road_texture_pct))
+                    .size(9.0)
+                    .color(compared_orange)
+                    .monospace(),
             );
-            ui.label(RichText::new("•").size(9.5).color(line_border));
+            ui.label(RichText::new("•").size(9.0).color(line_border));
             ui.label(
-                RichText::new(format!("Curbs: {:.0}%", analysis.bands.chassis_curbs_pct))
-                    .size(9.5)
-                    .color(gain_green),
+                RichText::new(format!("Curb {:.0}%", analysis.bands.chassis_curbs_pct))
+                    .size(9.0)
+                    .color(gain_green)
+                    .monospace(),
             );
-            ui.label(RichText::new("•").size(9.5).color(line_border));
+            ui.label(RichText::new("•").size(9.0).color(line_border));
             ui.label(
-                RichText::new(format!("SAT: {:.0}%", analysis.bands.steering_pct))
-                    .size(9.5)
-                    .color(ref_blue),
+                RichText::new(format!("SAT {:.0}%", analysis.bands.steering_pct))
+                    .size(9.0)
+                    .color(ref_blue)
+                    .monospace(),
             );
         });
     });
