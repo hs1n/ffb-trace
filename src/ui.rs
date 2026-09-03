@@ -1,20 +1,24 @@
 use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, RichText, Stroke, Vec2, WindowLevel};
-use egui_plot::{HLine, Line, LineStyle, MarkerShape, Plot, PlotPoints, Points, Text};
+use egui_plot::{HLine, Line, LineStyle, MarkerShape, Plot, PlotPoints, Points, Text, VLine};
 use parking_lot::RwLock;
+use std::collections::VecDeque;
 use std::sync::Arc;
 
-use crate::tracker::FfbTracker;
+use crate::spectrum::analyze_spectrum;
+use crate::tracker::{FfbTracker, ForceSample};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ViewMode {
     Waveform,
     Histogram,
+    Spectrum,
 }
 
 pub struct FfbTraceApp {
     tracker: Arc<RwLock<FfbTracker>>,
     source_description: Arc<RwLock<String>>,
     paused: bool,
+    paused_history: Option<VecDeque<ForceSample>>,
     view_mode: ViewMode,
     time_window_s: f64,
     is_mini: bool,
@@ -31,6 +35,7 @@ impl FfbTraceApp {
             tracker,
             source_description,
             paused: false,
+            paused_history: None,
             view_mode: ViewMode::Waveform,
             time_window_s: 6.0,
             is_mini,
@@ -65,12 +70,22 @@ impl eframe::App for FfbTraceApp {
         if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
             self.view_mode = match self.view_mode {
                 ViewMode::Waveform => ViewMode::Histogram,
-                ViewMode::Histogram => ViewMode::Waveform,
+                ViewMode::Histogram => ViewMode::Spectrum,
+                ViewMode::Spectrum => ViewMode::Waveform,
             };
         }
 
         let (tracker_snapshot, tuning_rec) = {
             let t = self.tracker.read();
+            let history_snapshot = if !self.paused {
+                self.paused_history = None;
+                t.history.clone()
+            } else {
+                if self.paused_history.is_none() {
+                    self.paused_history = Some(t.history.clone());
+                }
+                self.paused_history.clone().unwrap_or_default()
+            };
             (
                 (
                     t.device_name.clone(),
@@ -85,11 +100,7 @@ impl eframe::App for FfbTraceApp {
                     t.rolling_clip_percentage(),
                     t.current_gain,
                     t.histogram_bins,
-                    if !self.paused {
-                        t.history.clone()
-                    } else {
-                        std::collections::VecDeque::new()
-                    },
+                    history_snapshot,
                 ),
                 t.tuning_recommendation(),
             )
@@ -290,6 +301,11 @@ impl eframe::App for FfbTraceApp {
                             ui.separator();
 
                             // View Mode Toggle
+                            ui.selectable_value(
+                                &mut self.view_mode,
+                                ViewMode::Spectrum,
+                                "Spectrum (FFT)",
+                            );
                             ui.selectable_value(
                                 &mut self.view_mode,
                                 ViewMode::Histogram,
@@ -636,6 +652,19 @@ impl eframe::App for FfbTraceApp {
                                 ink_faint,
                             );
                         }
+                        ViewMode::Spectrum => {
+                            render_spectrum(
+                                ui,
+                                &history,
+                                sunken_bg,
+                                line_border,
+                                ref_blue,
+                                gain_green,
+                                compared_orange,
+                                loss_red,
+                                ink_faint,
+                            );
+                        }
                     }
                 });
         });
@@ -864,4 +893,164 @@ fn render_histogram(
         egui::FontId::monospace(9.0),
         clip_fill,
     );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_spectrum(
+    ui: &mut egui::Ui,
+    history: &std::collections::VecDeque<crate::tracker::ForceSample>,
+    _sunken_bg: Color32,
+    line_border: Color32,
+    ref_blue: Color32,
+    gain_green: Color32,
+    compared_orange: Color32,
+    loss_red: Color32,
+    ink_faint: Color32,
+) {
+    let analysis = analyze_spectrum(history);
+
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("Vibration Spectrum Analyzer (FFT, 0 - 100 Hz)")
+                .size(11.0)
+                .color(ink_faint),
+        );
+
+        if analysis.dominant_magnitude_pct >= 0.5 {
+            let (band_desc, band_color) = if analysis.dominant_freq_hz < 4.0 {
+                ("Steering / SAT", ref_blue)
+            } else if analysis.dominant_freq_hz < 15.0 {
+                ("Chassis & Curbs", gain_green)
+            } else if analysis.dominant_freq_hz < 40.0 {
+                ("Tire Scrub & Texture", compared_orange)
+            } else {
+                ("Engine & ABS", loss_red)
+            };
+
+            ui.label(
+                RichText::new(format!(
+                    "Peak: {:.1} Hz ({:.1}%) • {}",
+                    analysis.dominant_freq_hz, analysis.dominant_magnitude_pct, band_desc
+                ))
+                .size(11.0)
+                .color(band_color)
+                .strong(),
+            );
+        }
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                RichText::new(format!("40+Hz High: {:.0}%", analysis.bands.high_freq_pct))
+                    .size(10.0)
+                    .color(loss_red),
+            );
+            ui.label(RichText::new("•").size(10.0).color(line_border));
+            ui.label(
+                RichText::new(format!(
+                    "15-40Hz Scrub: {:.0}%",
+                    analysis.bands.road_texture_pct
+                ))
+                .size(10.0)
+                .color(compared_orange),
+            );
+            ui.label(RichText::new("•").size(10.0).color(line_border));
+            ui.label(
+                RichText::new(format!(
+                    "4-15Hz Curbs: {:.0}%",
+                    analysis.bands.chassis_curbs_pct
+                ))
+                .size(10.0)
+                .color(gain_green),
+            );
+            ui.label(RichText::new("•").size(10.0).color(line_border));
+            ui.label(
+                RichText::new(format!("0-4Hz SAT: {:.0}%", analysis.bands.steering_pct))
+                    .size(10.0)
+                    .color(ref_blue),
+            );
+        });
+    });
+
+    let points: PlotPoints = analysis
+        .bins
+        .iter()
+        .map(|b| [b.freq_hz as f64, b.magnitude_pct as f64])
+        .collect();
+
+    let max_mag = analysis
+        .bins
+        .iter()
+        .map(|b| b.magnitude_pct)
+        .fold(0.0_f32, f32::max)
+        .max(25.0);
+
+    Plot::new("ffb_spectrum")
+        .height(ui.available_height() - 34.0)
+        .include_x(0.0)
+        .include_x(100.0)
+        .include_y(0.0)
+        .include_y(max_mag as f64 * 1.15)
+        .show_axes([true, true])
+        .show_grid([true, true])
+        .x_axis_label("Frequency (Hz)")
+        .y_axis_label("Amplitude (% FFB)")
+        .allow_zoom(false)
+        .allow_drag(false)
+        .allow_scroll(false)
+        .show(ui, |plot_ui| {
+            // Frequency band vertical partition lines
+            plot_ui.vline(
+                VLine::new(4.0)
+                    .color(line_border)
+                    .style(LineStyle::Dashed { length: 3.0 }),
+            );
+            plot_ui.vline(
+                VLine::new(15.0)
+                    .color(line_border)
+                    .style(LineStyle::Dashed { length: 3.0 }),
+            );
+            plot_ui.vline(
+                VLine::new(40.0)
+                    .color(line_border)
+                    .style(LineStyle::Dashed { length: 3.0 }),
+            );
+
+            // Frequency band labels along the top
+            let y_label_pos = max_mag as f64 * 1.05;
+            plot_ui.text(Text::new(
+                egui_plot::PlotPoint::new(2.0, y_label_pos),
+                RichText::new("Steering / Load").size(9.0).color(ref_blue),
+            ));
+            plot_ui.text(Text::new(
+                egui_plot::PlotPoint::new(9.5, y_label_pos),
+                RichText::new("Chassis & Curbs").size(9.0).color(gain_green),
+            ));
+            plot_ui.text(Text::new(
+                egui_plot::PlotPoint::new(27.5, y_label_pos),
+                RichText::new("Tire Scrub / Texture").size(9.0).color(compared_orange),
+            ));
+            plot_ui.text(Text::new(
+                egui_plot::PlotPoint::new(70.0, y_label_pos),
+                RichText::new("Engine & ABS").size(9.0).color(loss_red),
+            ));
+
+            // Spectrum Curve with fill
+            let line = Line::new(points)
+                .color(ref_blue)
+                .fill(0.0_f32)
+                .width(1.8_f32);
+            plot_ui.line(line);
+
+            // Highlight dominant frequency peak if present
+            if analysis.dominant_magnitude_pct >= 0.5 {
+                let peak_pt = Points::new(vec![[
+                    analysis.dominant_freq_hz as f64,
+                    analysis.dominant_magnitude_pct as f64,
+                ]])
+                .color(loss_red)
+                .radius(4.0_f32)
+                .shape(MarkerShape::Circle);
+                plot_ui.points(peak_pt);
+            }
+        });
 }

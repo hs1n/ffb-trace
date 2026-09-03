@@ -1,6 +1,7 @@
 mod parser;
 mod runner;
 mod source;
+mod spectrum;
 mod tracker;
 mod ui;
 

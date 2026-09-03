@@ -25,16 +25,17 @@ Sim racers often tune force feedback based on subjective feel, wheelbase LEDs, o
   - Large bidirectional master force gauge (`-100%` to `+100%`) with tick marks and peak hold.
   - **400ms Clipping Alert Latch**: Keeps transient single-tick clipping clearly visible.
   - **Actionable Gain Tuning Advice**: Computes peak dynamic headroom and advises gain adjustments (`GAIN +15%`, `GAIN -8%`, `OPTIMAL`).
-  - **Dual Telemetry Views**:
+  - **Triple Telemetry Views**:
     - **Waveform View**: Rolling time-series curve (`3s`, `6s`, `10s`), zero line, and clipping boundary markers.
     - **Distribution Histogram**: 21-bin force histogram showing overall signal balance and edge saturation.
+    - **Vibration Spectrum Analyzer (FFT)**: Real-time frequency decomposition (0–100 Hz) identifying dominant vibration peaks and energy breakdown across 4 motorsport bands (Steering/SAT, Chassis/Curbs, Road Texture/Scrub, Engine/ABS).
   - **Mini-HUD Mode (`--mini` or press `M`)**: Compact always-on-top overlay strip (440x96) for multi-monitor or in-cockpit viewing.
   - **Hardware Privacy**: Device serial numbers are masked by default (`••••••••`), click to reveal/hide.
   - **Driver Rig Ergonomics**:
     - `Space`: Pause / Resume waveform scroll
     - `R`: Reset session metrics
     - `M`: Toggle Mini-HUD / Full Dashboard
-    - `Tab`: Switch Waveform / Distribution views
+    - `Tab`: Cycle Waveform / Distribution / Spectrum views
 - **Multi-Directory Auto-Detection**:
   - Automatically tracks the newest active session across `~/.local/state/ffb-trace/` and `~/ffblogs/`.
   - Seamlessly resets and tracks new sessions when the game restarts.
