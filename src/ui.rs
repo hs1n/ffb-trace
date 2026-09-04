@@ -193,7 +193,7 @@ impl eframe::App for FfbTraceApp {
                         {
                             self.is_mini = false;
                             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(
-                                780.0, 540.0,
+                                880.0, 680.0,
                             )));
                             ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
                                 WindowLevel::Normal,
@@ -301,7 +301,7 @@ impl eframe::App for FfbTraceApp {
                 .fill(panel_bg)
                 .stroke(Stroke::new(1.0_f32, line_border))
                 .corner_radius(CornerRadius::same(4))
-                .inner_margin(Vec2::new(12.0, 10.0))
+                .inner_margin(Vec2::new(10.0, 8.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         let (status_text, status_color) = if is_clip_latched {
@@ -471,8 +471,8 @@ impl eframe::App for FfbTraceApp {
             // 4. MAIN TELEMETRY CARDS (WAVEFORM / HISTOGRAM / SPECTRUM)
             // --------------------------------------------------------------
             let available_h = ui.available_height();
-            let top_card_h = (available_h * 0.49).clamp(160.0, 360.0);
-            let bottom_card_h = (available_h - top_card_h - 8.0).max(140.0);
+            let top_card_h = (available_h * 0.52).min(360.0);
+            let bottom_card_h = (available_h - top_card_h - 8.0).max(0.0);
 
             // Card 1: Waveform Card
             egui::Frame::NONE
@@ -497,8 +497,6 @@ impl eframe::App for FfbTraceApp {
                         ink_faint,
                     );
                 });
-
-            ui.add_space(8.0);
 
             // Card 2 (Distribution) & Card 3 (Spectrum)
             ui.columns(2, |cols| {
@@ -573,11 +571,11 @@ fn render_stat_card(
         .inner_margin(Vec2::new(10.0, 8.0))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.set_min_height(54.0);
+            ui.set_min_height(44.0);
             ui.label(
                 RichText::new(title)
                     .size(9.5)
-                    .color(Color32::from_rgb(120, 126, 138))
+                    .color(sub_color)
                     .strong(),
             );
             ui.add_space(2.0);
@@ -980,6 +978,7 @@ fn render_spectrum_view(
 ) {
     let analysis = analyze_spectrum(history);
 
+    // Title row: label + peak info
     ui.horizontal(|ui| {
         ui.label(
             RichText::new("VIBRATION SPECTRUM")
@@ -1005,46 +1004,49 @@ fn render_spectrum_view(
                 ("Engine", loss_red)
             };
 
-            ui.label(
-                RichText::new(format!(
-                    "Peak {:.0}Hz ({:.0}%) • {}",
-                    analysis.dominant_freq_hz, analysis.dominant_magnitude_pct, band_desc
-                ))
-                .size(9.5)
-                .color(band_color)
-                .strong(),
-            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "Peak {:.0}Hz ({:.0}%) • {}",
+                        analysis.dominant_freq_hz, analysis.dominant_magnitude_pct, band_desc
+                    ))
+                    .size(9.5)
+                    .color(band_color)
+                    .strong(),
+                );
+            });
         }
+    });
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                RichText::new(format!("Eng {:.0}%", analysis.bands.high_freq_pct))
-                    .size(9.0)
-                    .color(loss_red)
-                    .monospace(),
-            );
-            ui.label(RichText::new("•").size(9.0).color(line_border));
-            ui.label(
-                RichText::new(format!("Scrub {:.0}%", analysis.bands.road_texture_pct))
-                    .size(9.0)
-                    .color(compared_orange)
-                    .monospace(),
-            );
-            ui.label(RichText::new("•").size(9.0).color(line_border));
-            ui.label(
-                RichText::new(format!("Curb {:.0}%", analysis.bands.chassis_curbs_pct))
-                    .size(9.0)
-                    .color(gain_green)
-                    .monospace(),
-            );
-            ui.label(RichText::new("•").size(9.0).color(line_border));
-            ui.label(
-                RichText::new(format!("SAT {:.0}%", analysis.bands.steering_pct))
-                    .size(9.0)
-                    .color(ref_blue)
-                    .monospace(),
-            );
-        });
+    // Band energy breakdown row (separate line to prevent horizontal overflow)
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!("SAT {:.0}%", analysis.bands.steering_pct))
+                .size(9.0)
+                .color(ref_blue)
+                .monospace(),
+        );
+        ui.label(RichText::new("•").size(9.0).color(line_border));
+        ui.label(
+            RichText::new(format!("Curb {:.0}%", analysis.bands.chassis_curbs_pct))
+                .size(9.0)
+                .color(gain_green)
+                .monospace(),
+        );
+        ui.label(RichText::new("•").size(9.0).color(line_border));
+        ui.label(
+            RichText::new(format!("Scrub {:.0}%", analysis.bands.road_texture_pct))
+                .size(9.0)
+                .color(compared_orange)
+                .monospace(),
+        );
+        ui.label(RichText::new("•").size(9.0).color(line_border));
+        ui.label(
+            RichText::new(format!("Eng {:.0}%", analysis.bands.high_freq_pct))
+                .size(9.0)
+                .color(loss_red)
+                .monospace(),
+        );
     });
 
     let points: PlotPoints = analysis
@@ -1060,7 +1062,7 @@ fn render_spectrum_view(
         .fold(0.0_f32, f32::max)
         .max(25.0);
 
-    let plot_h = (height - 24.0).max(60.0);
+    let plot_h = (height - 42.0).max(40.0);
     Plot::new("ffb_spectrum")
         .height(plot_h)
         .include_x(0.0)
