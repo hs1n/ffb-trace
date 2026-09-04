@@ -1,21 +1,17 @@
 use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, RichText, Stroke, Vec2, WindowLevel};
-use egui_plot::{HLine, Line, LineStyle, MarkerShape, Plot, PlotPoints, Points, Text};
+use egui_plot::{HLine, Line, LineStyle, MarkerShape, Plot, PlotPoints, Points, Text, VLine};
 use parking_lot::RwLock;
+use std::collections::VecDeque;
 use std::sync::Arc;
 
-use crate::tracker::FfbTracker;
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum ViewMode {
-    Waveform,
-    Histogram,
-}
+use crate::spectrum::analyze_spectrum;
+use crate::tracker::{FfbTracker, ForceSample};
 
 pub struct FfbTraceApp {
     tracker: Arc<RwLock<FfbTracker>>,
     source_description: Arc<RwLock<String>>,
     paused: bool,
-    view_mode: ViewMode,
+    paused_history: Option<VecDeque<ForceSample>>,
     time_window_s: f64,
     is_mini: bool,
     reveal_serial: bool,
@@ -31,7 +27,7 @@ impl FfbTraceApp {
             tracker,
             source_description,
             paused: false,
-            view_mode: ViewMode::Waveform,
+            paused_history: None,
             time_window_s: 6.0,
             is_mini,
             reveal_serial: false,
@@ -58,19 +54,22 @@ impl eframe::App for FfbTraceApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(440.0, 96.0)));
                 ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(WindowLevel::AlwaysOnTop));
             } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(780.0, 540.0)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(880.0, 680.0)));
                 ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(WindowLevel::Normal));
             }
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
-            self.view_mode = match self.view_mode {
-                ViewMode::Waveform => ViewMode::Histogram,
-                ViewMode::Histogram => ViewMode::Waveform,
-            };
         }
 
         let (tracker_snapshot, tuning_rec) = {
             let t = self.tracker.read();
+            let history_snapshot = if !self.paused {
+                self.paused_history = None;
+                t.history.clone()
+            } else {
+                if self.paused_history.is_none() {
+                    self.paused_history = Some(t.history.clone());
+                }
+                self.paused_history.clone().unwrap_or_default()
+            };
             (
                 (
                     t.device_name.clone(),
@@ -85,11 +84,7 @@ impl eframe::App for FfbTraceApp {
                     t.rolling_clip_percentage(),
                     t.current_gain,
                     t.histogram_bins,
-                    if !self.paused {
-                        t.history.clone()
-                    } else {
-                        std::collections::VecDeque::new()
-                    },
+                    history_snapshot,
                 ),
                 t.tuning_recommendation(),
             )
@@ -198,7 +193,7 @@ impl eframe::App for FfbTraceApp {
                         {
                             self.is_mini = false;
                             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(
-                                780.0, 540.0,
+                                880.0, 680.0,
                             )));
                             ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
                                 WindowLevel::Normal,
@@ -282,24 +277,10 @@ impl eframe::App for FfbTraceApp {
                             // Reset Session
                             if ui
                                 .button(RichText::new("Reset [R]").size(11.0).color(ink_dim))
-                                .clicked()
+                                 .clicked()
                             {
                                 self.tracker.write().reset_session();
                             }
-
-                            ui.separator();
-
-                            // View Mode Toggle
-                            ui.selectable_value(
-                                &mut self.view_mode,
-                                ViewMode::Histogram,
-                                "Distribution",
-                            );
-                            ui.selectable_value(
-                                &mut self.view_mode,
-                                ViewMode::Waveform,
-                                "Waveform",
-                            );
                         });
                     });
 
@@ -320,7 +301,7 @@ impl eframe::App for FfbTraceApp {
                 .fill(panel_bg)
                 .stroke(Stroke::new(1.0_f32, line_border))
                 .corner_radius(CornerRadius::same(4))
-                .inner_margin(Vec2::new(12.0, 10.0))
+                .inner_margin(Vec2::new(10.0, 8.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         let (status_text, status_color) = if is_clip_latched {
@@ -487,157 +468,87 @@ impl eframe::App for FfbTraceApp {
             });
 
             // --------------------------------------------------------------
-            // 4. MAIN VISUALIZER (WAVEFORM / HISTOGRAM)
+            // 4. MAIN TELEMETRY CARDS (WAVEFORM / HISTOGRAM / SPECTRUM)
             // --------------------------------------------------------------
+            let available_h = ui.available_height();
+            let top_card_h = (available_h * 0.42).min(320.0);
+            let bottom_card_h = (available_h - top_card_h - 8.0).max(0.0);
+
+            // Card 1: Waveform Card
             egui::Frame::NONE
                 .fill(panel_bg)
                 .stroke(Stroke::new(1.0_f32, line_border))
                 .corner_radius(CornerRadius::same(4))
-                .inner_margin(8.0)
+                .inner_margin(Vec2::new(10.0, 8.0))
                 .show(ui, |ui| {
-                    match self.view_mode {
-                        ViewMode::Waveform => {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new("Force Waveform (-100% to +100%)")
-                                        .size(11.0)
-                                        .color(ink_faint),
-                                );
+                    ui.set_width(ui.available_width());
+                    ui.set_height(top_card_h - 16.0);
+                    render_waveform_view(
+                        ui,
+                        &history,
+                        &mut self.paused,
+                        &mut self.time_window_s,
+                        top_card_h - 16.0,
+                        ref_blue,
+                        loss_red,
+                        line_border,
+                        compared_orange,
+                        ink_dim,
+                        ink_faint,
+                    );
+                });
 
-                                if self.paused {
-                                    ui.label(
-                                        RichText::new("PAUSED [Space]")
-                                            .size(10.5)
-                                            .color(compared_orange)
-                                            .strong(),
-                                    );
-                                }
-
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        let pause_text = if self.paused {
-                                            "Resume [Space]"
-                                        } else {
-                                            "Pause [Space]"
-                                        };
-                                        if ui.button(RichText::new(pause_text).size(11.0)).clicked()
-                                        {
-                                            self.paused = !self.paused;
-                                        }
-
-                                        ui.separator();
-
-                                        ui.selectable_value(&mut self.time_window_s, 10.0, "10s");
-                                        ui.selectable_value(&mut self.time_window_s, 6.0, "6s");
-                                        ui.selectable_value(&mut self.time_window_s, 3.0, "3s");
-                                    },
-                                );
-                            });
-
-                            let plot_points: PlotPoints = history
-                                .iter()
-                                .map(|s| [s.time_s, s.level_pct as f64])
-                                .collect();
-
-                            let line = Line::new(plot_points).color(ref_blue).width(1.4_f32);
-
-                            // Waveform clipping highlight dots on saturated peaks
-                            let clip_points: PlotPoints = history
-                                .iter()
-                                .filter(|s| s.is_clipped || s.level_pct.abs() >= 99.5)
-                                .map(|s| [s.time_s, s.level_pct as f64])
-                                .collect();
-
-                            let clip_markers = Points::new(clip_points)
-                                .color(loss_red)
-                                .radius(2.5_f32)
-                                .shape(MarkerShape::Circle);
-
-                            let latest_time = history.back().map_or(0.0, |s| s.time_s);
-                            let x_min = (latest_time - self.time_window_s).max(0.0);
-                            let x_max = latest_time.max(self.time_window_s);
-
-                            Plot::new("ffb_waveform")
-                                .height(ui.available_height() - 34.0)
-                                .include_y(-108.0)
-                                .include_y(108.0)
-                                .include_x(x_min)
-                                .include_x(x_max)
-                                .show_axes([false, true])
-                                .show_grid([true, true])
-                                .allow_zoom(false)
-                                .allow_drag(false)
-                                .allow_scroll(false)
-                                .show(ui, |plot_ui| {
-                                    // Clipping limits
-                                    plot_ui.hline(
-                                        HLine::new(100.0)
-                                            .color(loss_red)
-                                            .style(LineStyle::Dashed { length: 4.0 }),
-                                    );
-                                    plot_ui.hline(
-                                        HLine::new(-100.0)
-                                            .color(loss_red)
-                                            .style(LineStyle::Dashed { length: 4.0 }),
-                                    );
-                                    plot_ui.hline(
-                                        HLine::new(0.0).color(line_border).style(LineStyle::Solid),
-                                    );
-
-                                    // Annotations on right edge
-                                    plot_ui.text(Text::new(
-                                        egui_plot::PlotPoint::new(
-                                            x_min + (x_max - x_min) * 0.02,
-                                            102.0,
-                                        ),
-                                        RichText::new("+100% Clip").size(9.0).color(loss_red),
-                                    ));
-                                    plot_ui.text(Text::new(
-                                        egui_plot::PlotPoint::new(
-                                            x_min + (x_max - x_min) * 0.02,
-                                            -102.0,
-                                        ),
-                                        RichText::new("-100% Clip").size(9.0).color(loss_red),
-                                    ));
-
-                                    plot_ui.line(line);
-                                    plot_ui.points(clip_markers);
-                                });
-                        }
-                        ViewMode::Histogram => {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new("Force Distribution Histogram")
-                                        .size(11.0)
-                                        .color(ink_faint),
-                                );
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.label(
-                                            RichText::new("21 bins (-100% to +100%, 10% / bin)")
-                                                .size(10.0)
-                                                .color(ink_faint),
-                                        );
-                                    },
-                                );
-                            });
-
-                            render_histogram(
+            // Card 2 (Distribution) & Card 3 (Spectrum)
+            ui.columns(2, |cols| {
+                cols[0].vertical(|ui| {
+                    egui::Frame::NONE
+                        .fill(panel_bg)
+                        .stroke(Stroke::new(1.0_f32, line_border))
+                        .corner_radius(CornerRadius::same(4))
+                        .inner_margin(Vec2::new(10.0, 8.0))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.set_height(bottom_card_h - 16.0);
+                            render_histogram_view(
                                 ui,
                                 &histogram_bins,
                                 constant_count,
+                                bottom_card_h - 16.0,
                                 sunken_bg,
                                 line_border,
                                 ref_blue,
                                 loss_red,
                                 gain_green,
+                                ink_dim,
                                 ink_faint,
                             );
-                        }
-                    }
+                        });
                 });
+
+                cols[1].vertical(|ui| {
+                    egui::Frame::NONE
+                        .fill(panel_bg)
+                        .stroke(Stroke::new(1.0_f32, line_border))
+                        .corner_radius(CornerRadius::same(4))
+                        .inner_margin(Vec2::new(10.0, 8.0))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.set_height(bottom_card_h - 16.0);
+                            render_spectrum_view(
+                                ui,
+                                &history,
+                                bottom_card_h - 16.0,
+                                line_border,
+                                ref_blue,
+                                gain_green,
+                                compared_orange,
+                                loss_red,
+                                ink_dim,
+                                ink_faint,
+                            );
+                        });
+                });
+            });
         });
     }
 }
@@ -660,11 +571,11 @@ fn render_stat_card(
         .inner_margin(Vec2::new(10.0, 8.0))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.set_min_height(54.0);
+            ui.set_min_height(44.0);
             ui.label(
                 RichText::new(title)
                     .size(9.5)
-                    .color(Color32::from_rgb(120, 126, 138))
+                    .color(sub_color)
                     .strong(),
             );
             ui.add_space(2.0);
@@ -775,10 +686,141 @@ fn render_force_bar(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn render_waveform_view(
+    ui: &mut egui::Ui,
+    history: &VecDeque<ForceSample>,
+    paused: &mut bool,
+    time_window_s: &mut f64,
+    height: f32,
+    ref_blue: Color32,
+    loss_red: Color32,
+    line_border: Color32,
+    compared_orange: Color32,
+    ink_dim: Color32,
+    ink_faint: Color32,
+) {
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("FORCE WAVEFORM")
+                .size(9.5)
+                .color(ink_dim)
+                .strong(),
+        );
+        ui.label(
+            RichText::new("(-100% to +100%)")
+                .size(9.5)
+                .color(ink_faint)
+                .monospace(),
+        );
+
+        if *paused {
+            ui.label(
+                RichText::new("PAUSED [Space]")
+                    .size(9.5)
+                    .color(compared_orange)
+                    .strong(),
+            );
+        }
+
+        ui.with_layout(
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                let pause_text = if *paused {
+                    "Resume [Space]"
+                } else {
+                    "Pause [Space]"
+                };
+                if ui
+                    .button(RichText::new(pause_text).size(10.5).color(ink_dim))
+                    .clicked()
+                {
+                    *paused = !*paused;
+                }
+
+                ui.separator();
+
+                ui.selectable_value(time_window_s, 10.0, "10s");
+                ui.selectable_value(time_window_s, 6.0, "6s");
+                ui.selectable_value(time_window_s, 3.0, "3s");
+            },
+        );
+    });
+
+    let plot_points: PlotPoints = history
+        .iter()
+        .map(|s| [s.time_s, s.level_pct as f64])
+        .collect();
+
+    let line = Line::new(plot_points).color(ref_blue).width(1.4_f32);
+
+    let clip_points: PlotPoints = history
+        .iter()
+        .filter(|s| s.is_clipped || s.level_pct.abs() >= 99.5)
+        .map(|s| [s.time_s, s.level_pct as f64])
+        .collect();
+
+    let clip_markers = Points::new(clip_points)
+        .color(loss_red)
+        .radius(2.5_f32)
+        .shape(MarkerShape::Circle);
+
+    let latest_time = history.back().map_or(0.0, |s| s.time_s);
+    let x_min = (latest_time - *time_window_s).max(0.0);
+    let x_max = latest_time.max(*time_window_s);
+
+    let plot_h = (height - 24.0).max(80.0);
+    Plot::new("ffb_waveform")
+        .height(plot_h)
+        .include_y(-108.0)
+        .include_y(108.0)
+        .include_x(x_min)
+        .include_x(x_max)
+        .show_axes([false, true])
+        .show_grid([true, true])
+        .allow_zoom(false)
+        .allow_drag(false)
+        .allow_scroll(false)
+        .show(ui, |plot_ui| {
+            plot_ui.hline(
+                HLine::new(100.0)
+                    .color(loss_red)
+                    .style(LineStyle::Dashed { length: 4.0 }),
+            );
+            plot_ui.hline(
+                HLine::new(-100.0)
+                    .color(loss_red)
+                    .style(LineStyle::Dashed { length: 4.0 }),
+            );
+            plot_ui.hline(
+                HLine::new(0.0).color(line_border).style(LineStyle::Solid),
+            );
+
+            plot_ui.text(Text::new(
+                egui_plot::PlotPoint::new(
+                    x_min + (x_max - x_min) * 0.02,
+                    102.0,
+                ),
+                RichText::new("+100% Clip").size(9.0).color(loss_red),
+            ));
+            plot_ui.text(Text::new(
+                egui_plot::PlotPoint::new(
+                    x_min + (x_max - x_min) * 0.02,
+                    -102.0,
+                ),
+                RichText::new("-100% Clip").size(9.0).color(loss_red),
+            ));
+
+            plot_ui.line(line);
+            plot_ui.points(clip_markers);
+        });
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_histogram(
     ui: &mut egui::Ui,
     bins: &[u64; 21],
     total_count: u64,
+    height: f32,
     bg: Color32,
     border: Color32,
     bar_fill: Color32,
@@ -786,7 +828,7 @@ fn render_histogram(
     center_fill: Color32,
     text_color: Color32,
 ) {
-    let desired_size = Vec2::new(ui.available_width(), ui.available_height() - 30.0);
+    let desired_size = Vec2::new(ui.available_width(), height);
     let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
 
     let painter = ui.painter();
@@ -864,4 +906,225 @@ fn render_histogram(
         egui::FontId::monospace(9.0),
         clip_fill,
     );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_histogram_view(
+    ui: &mut egui::Ui,
+    bins: &[u64; 21],
+    total_count: u64,
+    height: f32,
+    bg: Color32,
+    border: Color32,
+    bar_fill: Color32,
+    clip_fill: Color32,
+    center_fill: Color32,
+    ink_dim: Color32,
+    ink_faint: Color32,
+) {
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("FORCE DISTRIBUTION")
+                .size(9.5)
+                .color(ink_dim)
+                .strong(),
+        );
+        ui.label(
+            RichText::new("21 Bins")
+                .size(9.5)
+                .color(ink_faint)
+                .monospace(),
+        );
+        ui.with_layout(
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                ui.label(
+                    RichText::new(format!("{} updates", total_count))
+                        .size(9.5)
+                        .color(ink_faint)
+                        .monospace(),
+                );
+            },
+        );
+    });
+
+    let hist_h = (height - 22.0).max(60.0);
+    render_histogram(
+        ui,
+        bins,
+        total_count,
+        hist_h,
+        bg,
+        border,
+        bar_fill,
+        clip_fill,
+        center_fill,
+        ink_faint,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_spectrum_view(
+    ui: &mut egui::Ui,
+    history: &VecDeque<ForceSample>,
+    height: f32,
+    line_border: Color32,
+    ref_blue: Color32,
+    gain_green: Color32,
+    compared_orange: Color32,
+    loss_red: Color32,
+    ink_dim: Color32,
+    ink_faint: Color32,
+) {
+    let analysis = analyze_spectrum(history);
+
+    // Title row: label + peak info
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("VIBRATION SPECTRUM")
+                .size(9.5)
+                .color(ink_dim)
+                .strong(),
+        );
+        ui.label(
+            RichText::new("FFT 0-100Hz")
+                .size(9.5)
+                .color(ink_faint)
+                .monospace(),
+        );
+
+        if analysis.dominant_magnitude_pct >= 0.5 {
+            let (band_desc, band_color) = if analysis.dominant_freq_hz < 4.0 {
+                ("SAT", ref_blue)
+            } else if analysis.dominant_freq_hz < 15.0 {
+                ("Curbs", gain_green)
+            } else if analysis.dominant_freq_hz < 40.0 {
+                ("Scrub", compared_orange)
+            } else {
+                ("Engine", loss_red)
+            };
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "Peak {:.0}Hz ({:.0}%) • {}",
+                        analysis.dominant_freq_hz, analysis.dominant_magnitude_pct, band_desc
+                    ))
+                    .size(9.5)
+                    .color(band_color)
+                    .strong(),
+                );
+            });
+        }
+    });
+
+    // Band energy breakdown row (separate line to prevent horizontal overflow)
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!("SAT {:.0}%", analysis.bands.steering_pct))
+                .size(9.0)
+                .color(ref_blue)
+                .monospace(),
+        );
+        ui.label(RichText::new("•").size(9.0).color(line_border));
+        ui.label(
+            RichText::new(format!("Curb {:.0}%", analysis.bands.chassis_curbs_pct))
+                .size(9.0)
+                .color(gain_green)
+                .monospace(),
+        );
+        ui.label(RichText::new("•").size(9.0).color(line_border));
+        ui.label(
+            RichText::new(format!("Scrub {:.0}%", analysis.bands.road_texture_pct))
+                .size(9.0)
+                .color(compared_orange)
+                .monospace(),
+        );
+        ui.label(RichText::new("•").size(9.0).color(line_border));
+        ui.label(
+            RichText::new(format!("Eng {:.0}%", analysis.bands.high_freq_pct))
+                .size(9.0)
+                .color(loss_red)
+                .monospace(),
+        );
+    });
+
+    let points: PlotPoints = analysis
+        .bins
+        .iter()
+        .map(|b| [b.freq_hz as f64, b.magnitude_pct as f64])
+        .collect();
+
+    let max_mag = analysis
+        .bins
+        .iter()
+        .map(|b| b.magnitude_pct)
+        .fold(0.0_f32, f32::max)
+        .max(25.0);
+
+    let plot_h = (height - 42.0).max(40.0);
+    Plot::new("ffb_spectrum")
+        .height(plot_h)
+        .include_x(0.0)
+        .include_x(100.0)
+        .include_y(0.0)
+        .include_y(max_mag as f64 * 1.15)
+        .show_axes([true, true])
+        .show_grid([true, true])
+        .x_axis_label("Hz")
+        .allow_zoom(false)
+        .allow_drag(false)
+        .allow_scroll(false)
+        .show(ui, |plot_ui| {
+            plot_ui.vline(
+                VLine::new(4.0)
+                    .color(line_border)
+                    .style(LineStyle::Dashed { length: 3.0 }),
+            );
+            plot_ui.vline(
+                VLine::new(15.0)
+                    .color(line_border)
+                    .style(LineStyle::Dashed { length: 3.0 }),
+            );
+            plot_ui.vline(
+                VLine::new(40.0)
+                    .color(line_border)
+                    .style(LineStyle::Dashed { length: 3.0 }),
+            );
+
+            let y_label_pos = max_mag as f64 * 1.05;
+            plot_ui.text(Text::new(
+                egui_plot::PlotPoint::new(2.0, y_label_pos),
+                RichText::new("SAT").size(8.5).color(ref_blue),
+            ));
+            plot_ui.text(Text::new(
+                egui_plot::PlotPoint::new(9.5, y_label_pos),
+                RichText::new("Curbs").size(8.5).color(gain_green),
+            ));
+            plot_ui.text(Text::new(
+                egui_plot::PlotPoint::new(27.5, y_label_pos),
+                RichText::new("Scrub").size(8.5).color(compared_orange),
+            ));
+            plot_ui.text(Text::new(
+                egui_plot::PlotPoint::new(70.0, y_label_pos),
+                RichText::new("Engine").size(8.5).color(loss_red),
+            ));
+
+            let line = Line::new(points)
+                .color(ref_blue)
+                .fill(0.0_f32)
+                .width(1.8_f32);
+            plot_ui.line(line);
+
+            if analysis.dominant_magnitude_pct >= 0.5 {
+                let peak_pt = Points::new(vec![[
+                    analysis.dominant_freq_hz as f64,
+                    analysis.dominant_magnitude_pct as f64,
+                ]])
+                .color(loss_red)
+                .radius(4.0_f32)
+                .shape(MarkerShape::Circle);
+                plot_ui.points(peak_pt);
+            }
+        });
 }

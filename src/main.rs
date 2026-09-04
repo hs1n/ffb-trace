@@ -1,6 +1,7 @@
 mod parser;
 mod runner;
 mod source;
+mod spectrum;
 mod tracker;
 mod ui;
 
@@ -155,12 +156,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (initial_w, initial_h) = if start_mini {
         (440.0, 96.0)
     } else {
-        (780.0, 540.0)
+        (880.0, 680.0)
     };
     let (min_w, min_h) = if start_mini {
         (320.0, 80.0)
     } else {
-        (480.0, 320.0)
+        (560.0, 420.0)
     };
 
     let mut builder = eframe::egui::ViewportBuilder::default()
