@@ -2,7 +2,7 @@
 
 Real-time Force Feedback (FFB) clipping and telemetry monitor for Linux sim racing.
 
-![ffb-trace Waveform Dashboard](docs/screenshots/waveform.png)
+![ffb-trace Dashboard](docs/screenshots/dashboard.png)
 
 `ffb-trace` monitors Linux `evdev` force feedback calls in real time. It detects force clipping, computes update rates (Hz), provides actionable gain tuning advice, and renders live force waveforms.
 

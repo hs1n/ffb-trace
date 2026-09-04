@@ -471,7 +471,7 @@ impl eframe::App for FfbTraceApp {
             // 4. MAIN TELEMETRY CARDS (WAVEFORM / HISTOGRAM / SPECTRUM)
             // --------------------------------------------------------------
             let available_h = ui.available_height();
-            let top_card_h = (available_h * 0.52).min(360.0);
+            let top_card_h = (available_h * 0.42).min(320.0);
             let bottom_card_h = (available_h - top_card_h - 8.0).max(0.0);
 
             // Card 1: Waveform Card
@@ -482,7 +482,7 @@ impl eframe::App for FfbTraceApp {
                 .inner_margin(Vec2::new(10.0, 8.0))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.set_min_height(top_card_h - 16.0);
+                    ui.set_height(top_card_h - 16.0);
                     render_waveform_view(
                         ui,
                         &history,
@@ -508,7 +508,7 @@ impl eframe::App for FfbTraceApp {
                         .inner_margin(Vec2::new(10.0, 8.0))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            ui.set_min_height(bottom_card_h - 16.0);
+                            ui.set_height(bottom_card_h - 16.0);
                             render_histogram_view(
                                 ui,
                                 &histogram_bins,
@@ -533,7 +533,7 @@ impl eframe::App for FfbTraceApp {
                         .inner_margin(Vec2::new(10.0, 8.0))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            ui.set_min_height(bottom_card_h - 16.0);
+                            ui.set_height(bottom_card_h - 16.0);
                             render_spectrum_view(
                                 ui,
                                 &history,
