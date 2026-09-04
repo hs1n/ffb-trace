@@ -4,110 +4,107 @@ Real-time Force Feedback (FFB) clipping and telemetry monitor for Linux sim raci
 
 ![ffb-trace Dashboard](docs/screenshots/dashboard.png)
 
-`ffb-trace` monitors Linux `evdev` force feedback calls in real time. It detects force clipping, computes update rates (Hz), provides actionable gain tuning advice, and renders live force waveforms.
-
----
-
-## Core Principle: Empirical Ground Truth
-
-Sim racers often tune force feedback based on subjective feel, wheelbase LEDs, or vendor software filters. This introduces bias and guesswork. `ffb-trace` replaces subjective impressions with **empirical ground truth**:
-
-- **OS Boundary Interception**: `libffbwrapper.so` hooks `ioctl(EVIOCSFF)` calls between the game and the Linux `evdev` subsystem. It captures the exact digital force values issued by the physics engine before any wheelbase driver alterations.
-- **Mathematical Saturation**: In the Linux kernel force feedback API, force levels use signed 16-bit integers (`-32768` to `+32767`). Clipping is an objective mathematical fact: whenever `|level| >= 32767`, software dynamic range is exhausted and telemetry details are flattened.
-- **Data-Driven Tuning**: Gain advice derives from measured peak headroom and histogram distribution across the entire session, enabling repeatable, evidence-based calibration.
+> [!CAUTION]
+> **Risk of Personal Injury and Hardware Damage**
+>
+> Force feedback hardware (especially Direct Drive wheelbases) can produce high torque and sudden, violent movements. Increasing force feedback gain can cause severe physical injury or equipment damage.
+>
+> - All gain tuning advice in `ffb-trace` is based on software signal levels. It does not account for your wheelbase torque rating, physical strength, or mounting rig rigidity.
+> - Always adjust gain in small increments. Keep hands and body clear of spokes during violent oscillations, spins, or crashes.
+> - **You use this software and apply its recommendations entirely at your own risk.** The authors accept no liability for any personal injury, hardware failure, or property damage.
 
 ---
 
 ## Features
 
-- **Motorsport Telemetry GUI (`egui`)**:
-  - High-contrast dark telemetry theme aligned with `sms-telemetry` design tokens.
-  - Large bidirectional master force gauge (`-100%` to `+100%`) with tick marks and peak hold.
-  - **400ms Clipping Alert Latch**: Keeps transient single-tick clipping clearly visible.
-  - **Actionable Gain Tuning Advice**: Computes peak dynamic headroom and advises gain adjustments (`GAIN +15%`, `GAIN -8%`, `OPTIMAL`).
-  - **Unified Triple-Card Telemetry Dashboard**:
-    - **Force Waveform Card**: Rolling time-series curve (`3s`, `6s`, `10s`), zero line, and clipping boundary markers.
-    - **Force Distribution Card**: 21-bin force histogram showing overall signal balance and edge saturation.
-    - **Vibration Spectrum Card (FFT)**: Real-time frequency decomposition (0–100 Hz) identifying dominant vibration peaks and energy breakdown across 4 motorsport bands (Steering/SAT, Chassis/Curbs, Road Texture/Scrub, Engine/ABS).
-  - **Mini-HUD Mode (`--mini` or press `M`)**: Compact always-on-top overlay strip (440x96) for multi-monitor or in-cockpit viewing.
-  - **Hardware Privacy**: Device serial numbers are masked by default (`••••••••`), click to reveal/hide.
-  - **Driver Rig Ergonomics**:
-    - `Space`: Pause / Resume waveform scroll
-    - `R`: Reset session metrics
-    - `M`: Toggle Mini-HUD / Full Dashboard
-- **Multi-Directory Auto-Detection**:
-  - Automatically tracks the newest active session across `~/.local/state/ffb-trace/` and `~/ffblogs/`.
-  - Seamlessly resets and tracks new sessions when the game restarts.
-- **Lightweight Native Binary**:
-  - Single standalone binary written in Rust.
-  - Uses minimal CPU and GPU resources during races.
+### Telemetry Dashboard
 
----
+High-contrast dark GUI built with `egui`, aligned with `sms-telemetry` design tokens.
 
-## Installation
+- **Force Gauge** — Bidirectional bar (`-100%` to `+100%`) with graduation ticks and peak hold.
+- **400 ms Clipping Latch** — Keeps transient single-tick clipping visible to the human eye.
+- **Gain Tuning Advice** — Computes peak headroom and recommends gain adjustments (`GAIN +15%`, `GAIN -8%`, `OPTIMAL`).
+- **Force Waveform** — Rolling time-series (`3s` / `6s` / `10s`) with zero line and clipping boundary markers.
+- **Force Distribution** — 21-bin histogram showing signal balance and edge saturation.
+- **Vibration Spectrum (FFT)** — Real-time 256-point frequency decomposition (0–100 Hz) with energy breakdown across 4 motorsport bands:
 
-### Prerequisites
+  | Band | Range | Signal Source |
+  |------|-------|---------------|
+  | SAT | 0–4 Hz | Steering self-aligning torque, load transfer |
+  | Curbs | 4–15 Hz | Chassis roll/pitch, bump rumble |
+  | Scrub | 15–40 Hz | Tire slip angle, road surface texture |
+  | Engine | 40+ Hz | Engine harmonics, ABS pulsation, drivetrain lash |
 
-- Rust toolchain (`cargo` and `rustc`):
-  ```bash
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-  ```
+### Mini-HUD Mode
 
-### Build
+Compact always-on-top overlay strip (440 × 96) for multi-monitor or in-cockpit use. Launch with `--mini` or toggle with `M`.
 
-```bash
-cargo build --release
-```
+### Keyboard Shortcuts
 
-Copy the binary to your local path:
-```bash
-cp target/release/ffb-trace ~/.local/bin/
-```
+| Key | Action |
+|-----|--------|
+| `Space` | Pause / Resume waveform |
+| `R` | Reset session metrics |
+| `M` | Toggle Mini-HUD / Full Dashboard |
+
+### Privacy & Performance
+
+- Device serial numbers are masked by default (`••••••••`). Click to reveal.
+- Single standalone Rust binary with minimal CPU/GPU overhead during races.
 
 ---
 
 ## Usage
 
-### Method 1: Simple On-Demand Launch (Recommended)
+### On-Demand Launch (Recommended)
 
-You do not need to look up device paths or configure complex parameters. `ffb-trace` auto-detects your wheel and runs the game:
+Auto-detects your wheel and intercepts FFB calls:
 
 ```bash
-# Launch a Steam game directly (e.g. Project CARS 2)
+# Launch a Steam game (e.g. Project CARS 2)
 ffb-trace run steam steam://rungameid/378860
 
-# Or launch any native/Proton sim command
+# Launch any native/Proton sim
 ffb-trace run /path/to/game
-```
 
-If you prefer launching from Steam, set this minimal option once:
-```bash
+# As a Steam launch option
 ffb-trace run -- %command%
 ```
 
-### Method 2: Standalone Live Monitor
+### Standalone Monitor
 
-If your game is already running or writing to a log:
+Attach to an already-running session:
 
 ```bash
-# Auto-follow the newest session log in ~/.local/state/ffb-trace/
+# Auto-follow the newest log in ~/.local/state/ffb-trace/
 ffb-trace
 
 # Trace a specific log file
 ffb-trace --file /path/to/session.log
 
-# Start in compact Mini-HUD overlay mode (always-on-top)
+# Mini-HUD overlay
 ffb-trace --mini
 
-# Run in headless terminal mode
+# Headless terminal mode
 ffb-trace --no-gui
 ```
 
 ---
 
-## Alignment with sms-telemetry
+## Installation
 
-`ffb-trace` adopts the exact dark palette, contrast tokens, and line styling defined in `sms-telemetry`'s `theme.css`.
+Requires the Rust toolchain (`cargo` and `rustc`):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Build and install:
+
+```bash
+cargo build --release
+cp target/release/ffb-trace ~/.local/bin/
+```
 
 ---
 
@@ -119,28 +116,23 @@ Sim Racing Game (Proton / Native)
        ▼
    libffbwrapper.so (intercepts EVIOCSFF ioctl)
        │
-       ├─► ~/.local/state/ffb-trace/*.log (or FIFO pipe)
-       │         │
-       │         ▼
-       │     ffb-trace (Rust Desktop App)
-       │         │
-       │         └─► egui Desktop GUI (Waveform, Force Bar, Clip Alert)
+       ├──► ~/.local/state/ffb-trace/*.log
+       │          │
+       │          ▼
+       │      ffb-trace (Rust)
+       │          ├─ parser    → parse ffbwrap log lines
+       │          ├─ tracker   → clipping stats, histogram, peak hold
+       │          ├─ spectrum  → FFT vibration analysis
+       │          └─ ui        → egui dashboard (Waveform, Distribution, Spectrum)
        ▼
-Linux evdev Kernel Subsystem -> Steering Wheel Base
+Linux evdev Kernel Subsystem → Steering Wheel Base
 ```
 
----
+### How It Works
 
-## Safety Warning & Disclaimer
+`ffb-trace` intercepts force feedback at the OS boundary — between the game and the Linux `evdev` subsystem — using `libffbwrapper.so` (`ioctl(EVIOCSFF)` hook). This captures the exact digital force values from the physics engine before any wheelbase-side filtering.
 
-> [!CAUTION]
-> **Risk of Personal Injury and Hardware Damage**
->
-> Force feedback hardware (especially Direct Drive wheelbases) can produce high torque and sudden, violent movements. Increasing force feedback gain can cause severe physical injury (including sprains, fractures, or bruises) or equipment damage.
->
-> - **Informational estimates only**: All gain tuning advice and telemetry metrics in `ffb-trace` are mathematical calculations based on software signal levels. They do not consider your wheelbase torque rating, physical strength, or mounting rig rigidity.
-> - **Adjust gain gradually**: Always adjust gain in small increments and test carefully. Keep hands and body clear of spokes and moving parts during violent oscillations, spins, or crashes.
-> - **Assumption of risk and disclaimer of liability**: You use this software and apply its recommendations entirely at your own risk. The authors and contributors accept no responsibility or liability for any personal injury, hardware failure, or property damage resulting from the use of `ffb-trace`.
+In the Linux kernel FFB API, force levels are signed 16-bit integers (`-32768` to `+32767`). Clipping occurs when `|level| >= 32767` — a mathematical fact, not a subjective impression. Gain advice derives from measured peak headroom and histogram distribution across the session, enabling repeatable, evidence-based calibration.
 
 ---
 
@@ -148,4 +140,3 @@ Linux evdev Kernel Subsystem -> Steering Wheel Base
 
 - `ffb-trace` is licensed under **GPL-3.0-only**. See the [LICENSE](LICENSE) file.
 - The embedded interceptor (`c/ffbwrapper.c`) is derived from [ffbtools](https://github.com/berarma/ffbtools) by Bernat Arlandis, licensed under GPL-3.0-or-later. All copyright headers are preserved.
-
